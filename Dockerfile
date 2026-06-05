@@ -43,6 +43,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=5173
 ENV HOST=0.0.0.0
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_DIR=/etc/ssl/certs
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV NODE_OPTIONS=--use-openssl-ca
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # Non-sensitive build arguments
 ARG VITE_LOG_LEVEL=debug
@@ -57,8 +62,9 @@ ENV WRANGLER_SEND_METRICS=false \
 # Note: API keys should be provided at runtime via docker run -e or docker-compose
 # Example: docker run -e OPENAI_API_KEY=your_key_here ...
 
-# Install HTTP clients for Docker/Coolify healthchecks and copy bindings script
-RUN apt-get update && apt-get install -y --no-install-recommends curl wget \
+# Install CA roots and HTTP clients for workerd outbound HTTPS and Coolify healthchecks.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl wget \
+  && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy built files and scripts
