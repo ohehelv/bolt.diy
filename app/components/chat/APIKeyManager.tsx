@@ -16,6 +16,23 @@ const providerEnvKeyStatusCache: Record<string, boolean> = {};
 
 const apiKeyMemoizeCache: { [k: string]: Record<string, string> } = {};
 
+function parseStoredApiKeys(storedApiKeys: string): Record<string, string> {
+  try {
+    const parsedKeys = JSON.parse(storedApiKeys);
+
+    if (parsedKeys && typeof parsedKeys === 'object' && !Array.isArray(parsedKeys)) {
+      return parsedKeys;
+    }
+  } catch (error) {
+    console.error('Invalid API keys cookie, clearing it:', error);
+  }
+
+  Cookies.remove('apiKeys');
+  delete apiKeyMemoizeCache[storedApiKeys];
+
+  return {};
+}
+
 export function getApiKeysFromCookies() {
   const storedApiKeys = Cookies.get('apiKeys');
   let parsedKeys: Record<string, string> = {};
@@ -24,7 +41,7 @@ export function getApiKeysFromCookies() {
     parsedKeys = apiKeyMemoizeCache[storedApiKeys];
 
     if (!parsedKeys) {
-      parsedKeys = apiKeyMemoizeCache[storedApiKeys] = JSON.parse(storedApiKeys);
+      parsedKeys = apiKeyMemoizeCache[storedApiKeys] = parseStoredApiKeys(storedApiKeys);
     }
   }
 

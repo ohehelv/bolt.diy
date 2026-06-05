@@ -366,7 +366,7 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function authForm({ mode, error = '' }) {
+function authFormSafe({ mode, error = '' }) {
   const isRegister = mode === 'register';
   const title = isRegister ? 'Создать администратора' : 'Вход в Bolt';
   const description = isRegister
@@ -400,7 +400,7 @@ function authForm({ mode, error = '' }) {
   );
 }
 
-function injectLogout(html, user) {
+function injectLogoutSafe(html, user) {
   const widget = `
 <form method="post" action="/auth/logout" style="position:fixed;right:14px;top:14px;z-index:2147483647;margin:0">
   <button title="Sign out" style="border:1px solid rgba(255,255,255,.18);border-radius:6px;background:rgba(18,22,30,.88);color:#f7f8fa;height:34px;padding:0 12px;font:600 13px Inter,system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.24);cursor:pointer">${escapeHtml(user.login)} | Logout</button>
@@ -411,6 +411,78 @@ function injectLogout(html, user) {
   }
 
   return `${html}${widget}`;
+}
+
+function authForm({ mode, error = '' }) {
+  const isRegister = mode === 'register';
+  const title = isRegister ? 'Create administrator' : 'Sign in to Bolt';
+  const description = isRegister
+    ? 'This is the first registration. The created user will become the administrator.'
+    : 'Sign in with the administrator account to continue.';
+  const action = isRegister ? '/auth/register' : '/auth/login';
+
+  return page(
+    title,
+    `
+      <h1>${title}</h1>
+      <p>${description}</p>
+      ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+      <form method="post" action="${action}">
+        <label>
+          Login or email
+          <input name="login" autocomplete="username" required autofocus />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="${isRegister ? 'new-password' : 'current-password'}" minlength="8" required />
+        </label>
+        <button type="submit">${isRegister ? 'Create admin' : 'Sign in'}</button>
+      </form>
+      ${
+        isRegister
+          ? ''
+          : '<p class="hint">No admin yet? Open <a href="/auth/register">first registration</a>.</p>'
+      }
+    `,
+  );
+}
+
+function injectLogout(html, user) {
+  const cookieSanitizer = `
+<script>
+(() => {
+  for (const name of ['apiKeys', 'providers']) {
+    const row = document.cookie.split(';').map((item) => item.trim()).find((item) => item.startsWith(name + '='));
+
+    if (!row) {
+      continue;
+    }
+
+    try {
+      JSON.parse(decodeURIComponent(row.slice(name.length + 1)));
+    } catch {
+      document.cookie = name + '=; Path=/; Max-Age=0; SameSite=Lax';
+    }
+  }
+})();
+</script>`;
+  const widget = `
+<form method="post" action="/auth/logout" style="position:fixed;right:14px;top:14px;z-index:2147483647;margin:0">
+  <button title="Sign out" style="border:1px solid rgba(255,255,255,.18);border-radius:6px;background:rgba(18,22,30,.88);color:#f7f8fa;height:34px;padding:0 12px;font:600 13px Inter,system-ui,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,.24);cursor:pointer">${escapeHtml(user.login)} | Logout</button>
+</form>`;
+  let nextHtml = html;
+
+  if (nextHtml.includes('</head>')) {
+    nextHtml = nextHtml.replace('</head>', `${cookieSanitizer}</head>`);
+  } else {
+    nextHtml = `${cookieSanitizer}${nextHtml}`;
+  }
+
+  if (nextHtml.includes('</body>')) {
+    return nextHtml.replace('</body>', `${widget}</body>`);
+  }
+
+  return `${nextHtml}${widget}`;
 }
 
 function readBody(request) {
@@ -487,7 +559,7 @@ async function handleAuth(request, res, pathname) {
     }
 
     if (request.method === 'GET') {
-      send(res, 200, authForm({ mode: 'register' }), { 'Content-Type': 'text/html; charset=utf-8' });
+      send(res, 200, authFormSafe({ mode: 'register' }), { 'Content-Type': 'text/html; charset=utf-8' });
       return;
     }
 
@@ -506,7 +578,7 @@ async function handleAuth(request, res, pathname) {
     const password = String(form.get('password') || '');
 
     if (login.length < 3 || password.length < 8) {
-      send(res, 400, authForm({ mode: 'register', error: 'Login must be at least 3 characters and password at least 8.' }), {
+      send(res, 400, authFormSafe({ mode: 'register', error: 'Login must be at least 3 characters and password at least 8.' }), {
         'Content-Type': 'text/html; charset=utf-8',
       });
       return;
@@ -546,7 +618,7 @@ async function handleAuth(request, res, pathname) {
     }
 
     if (request.method === 'GET') {
-      send(res, 200, authForm({ mode: 'login' }), { 'Content-Type': 'text/html; charset=utf-8' });
+      send(res, 200, authFormSafe({ mode: 'login' }), { 'Content-Type': 'text/html; charset=utf-8' });
       return;
     }
 
@@ -566,7 +638,7 @@ async function handleAuth(request, res, pathname) {
     const user = readUsers().users.find((item) => item.login === login);
 
     if (!user || !verifyPassword(password, user.passwordHash)) {
-      send(res, 401, authForm({ mode: 'login', error: 'Invalid login or password.' }), {
+      send(res, 401, authFormSafe({ mode: 'login', error: 'Invalid login or password.' }), {
         'Content-Type': 'text/html; charset=utf-8',
       });
       return;
@@ -598,6 +670,54 @@ function unauthorized(request, res) {
   );
 }
 
+function safeDecodeCookieValue(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function isValidJsonCookieValue(value) {
+  try {
+    const parsed = JSON.parse(safeDecodeCookieValue(value));
+    return parsed !== null && typeof parsed === 'object';
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeClientJsonCookies(cookieHeader = '') {
+  const protectedNames = new Set(['apiKeys', 'providers']);
+  const kept = [];
+
+  for (const rawItem of String(cookieHeader).split(';')) {
+    const item = rawItem.trim();
+
+    if (!item) {
+      continue;
+    }
+
+    const index = item.indexOf('=');
+
+    if (index < 0) {
+      kept.push(item);
+      continue;
+    }
+
+    const name = safeDecodeCookieValue(item.slice(0, index).trim());
+    const value = item.slice(index + 1).trim();
+
+    if (protectedNames.has(name) && value && !isValidJsonCookieValue(value)) {
+      continue;
+    }
+
+    kept.push(item);
+  }
+
+  return kept.join('; ');
+}
+
 function copyRequestHeaders(request) {
   const headers = new Headers();
   const skip = new Set([
@@ -615,6 +735,16 @@ function copyRequestHeaders(request) {
 
   for (const [key, value] of Object.entries(request.headers)) {
     if (!value || skip.has(key.toLowerCase())) {
+      continue;
+    }
+
+    if (key.toLowerCase() === 'cookie') {
+      const sanitizedCookie = sanitizeClientJsonCookies(Array.isArray(value) ? value.join('; ') : value);
+
+      if (sanitizedCookie) {
+        headers.set(key, sanitizedCookie);
+      }
+
       continue;
     }
 
@@ -663,7 +793,7 @@ async function proxyToBolt(request, res, user) {
 
   if (shouldInjectLogout) {
     const html = await upstreamResponse.text();
-    const injected = injectLogout(html, user);
+    const injected = injectLogoutSafe(html, user);
     const headers = copyResponseHeaders(upstreamResponse, { skipContentLength: true });
     headers['Content-Length'] = Buffer.byteLength(injected);
     res.writeHead(upstreamResponse.status, headers);
@@ -684,7 +814,17 @@ async function proxyToBolt(request, res, user) {
 
 function copyResponseHeaders(response, options = {}) {
   const headers = {};
-  const skip = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding']);
+  const skip = new Set([
+    'connection',
+    'content-encoding',
+    'content-length',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+  ]);
 
   if (options.skipContentLength) {
     skip.add('content-length');
