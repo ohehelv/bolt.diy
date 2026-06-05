@@ -81,10 +81,10 @@ EXPOSE 5173 3000
 
 # Healthcheck for deployment platforms
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
-  CMD curl -fsS http://localhost:5173/ || exit 1
+  CMD curl -fsS http://localhost:3000/auth/health || exit 1
 
-# Start using dockerstart script with Wrangler
-CMD ["pnpm", "run", "dockerstart"]
+# Start Bolt behind the built-in auth proxy.
+CMD ["sh", "/app/scripts/start-auth-proxy.sh"]
 
 
 # ---- development stage ----
