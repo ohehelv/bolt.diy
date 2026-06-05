@@ -734,11 +734,13 @@ function copyRequestHeaders(request) {
   ]);
 
   for (const [key, value] of Object.entries(request.headers)) {
-    if (!value || skip.has(key.toLowerCase())) {
+    const lowerKey = key.toLowerCase();
+
+    if (!value || skip.has(lowerKey) || lowerKey.startsWith('x-bolt-auth-')) {
       continue;
     }
 
-    if (key.toLowerCase() === 'cookie') {
+    if (lowerKey === 'cookie') {
       const sanitizedCookie = sanitizeClientJsonCookies(Array.isArray(value) ? value.join('; ') : value);
 
       if (sanitizedCookie) {
@@ -772,6 +774,11 @@ async function proxyToBolt(request, res, user) {
     headers: copyRequestHeaders(request),
     redirect: 'manual',
   };
+
+  if (user?.login) {
+    init.headers.set('x-bolt-auth-login', user.login);
+    init.headers.set('x-bolt-auth-role', user.role || '');
+  }
 
   if (method !== 'GET' && method !== 'HEAD') {
     init.body = request;

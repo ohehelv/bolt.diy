@@ -57,6 +57,8 @@ export const useMCPStore = create<Store & Actions>((set, get) => ({
         }
       } else {
         localStorage.setItem(MCP_SETTINGS_KEY, JSON.stringify(defaultSettings));
+        const serverTools = await updateServerConfig(defaultSettings.mcpConfig);
+        set(() => ({ serverTools }));
       }
     }
 

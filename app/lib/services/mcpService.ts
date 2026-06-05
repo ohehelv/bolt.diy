@@ -20,6 +20,8 @@ import { createScopedLogger } from '~/utils/logger';
 
 const logger = createScopedLogger('mcp-service');
 
+type EnvRecord = object;
+
 export const stdioServerConfigSchema = z
   .object({
     type: z.enum(['stdio']).optional(),
@@ -87,6 +89,20 @@ export type ToolCall = {
 
 export type MCPServerTools = Record<string, MCPServer>;
 
+export type PublicMCPServerTools = Record<
+  string,
+  | {
+      status: 'available';
+      tools: ToolSet;
+      config: MCPServerConfig;
+    }
+  | {
+      status: 'unavailable';
+      error: string;
+      config: MCPServerConfig;
+    }
+>;
+
 export type MCPServerAvailable = {
   status: 'available';
   tools: ToolSet;
@@ -100,6 +116,151 @@ export type MCPServerUnavailable = {
   config: MCPServerConfig;
 };
 export type MCPServer = MCPServerAvailable | MCPServerUnavailable;
+
+function readEnv(env: EnvRecord | undefined, key: string): string {
+  const processEnv = typeof process !== 'undefined' ? process.env : undefined;
+  const runtimeEnv = env as Record<string, unknown> | undefined;
+
+  return String(runtimeEnv?.[key] || processEnv?.[key] || '').trim();
+}
+
+function isEnabled(value: string, defaultValue = true) {
+  if (!value) {
+    return defaultValue;
+  }
+
+  return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
+}
+
+export function buildServerMCPConfig(env?: EnvRecord): MCPConfig {
+  const mcpServers: MCPConfig['mcpServers'] = {};
+
+  if (isEnabled(readEnv(env, 'MCP_CONTEXT7_ENABLED'), true)) {
+    const context7Args = ['-y', readEnv(env, 'MCP_CONTEXT7_PACKAGE') || '@upstash/context7-mcp@latest'];
+    const context7ApiKey = readEnv(env, 'CONTEXT7_API_KEY');
+
+    mcpServers.context7 = {
+      type: 'stdio',
+      command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
+      args: context7Args,
+      env: context7ApiKey
+        ? {
+            CONTEXT7_API_KEY: context7ApiKey,
+          }
+        : undefined,
+    };
+  }
+
+  if (isEnabled(readEnv(env, 'MCP_COOLIFY_ENABLED'), true)) {
+    const baseUrl = readEnv(env, 'MCP_COOLIFY_BASE_URL') || readEnv(env, 'COOLIFY_BASE_URL');
+    const token =
+      readEnv(env, 'MCP_COOLIFY_TOKEN') ||
+      readEnv(env, 'COOLIFY_TOKEN') ||
+      readEnv(env, 'COOLIFY_API_TOKEN') ||
+      readEnv(env, 'COOLIFY_ACCESS_TOKEN');
+
+    if (baseUrl && token) {
+      mcpServers.coolify = {
+        type: 'stdio',
+        command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
+        args: ['-y', readEnv(env, 'MCP_COOLIFY_PACKAGE') || 'coolify-mcp-server@latest'],
+        env: {
+          COOLIFY_BASE_URL: baseUrl,
+          COOLIFY_TOKEN: token,
+        },
+      };
+    }
+  }
+
+  return { mcpServers };
+}
+
+function mergeMCPConfigs(serverConfig: MCPConfig, userConfig: MCPConfig): MCPConfig {
+  return {
+    mcpServers: {
+      ...serverConfig.mcpServers,
+      ...(userConfig?.mcpServers || {}),
+    },
+  };
+}
+
+function maskSensitiveRecord(record: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!record) {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => {
+      const lowerKey = key.toLowerCase();
+      const isSensitive =
+        lowerKey.includes('token') ||
+        lowerKey.includes('secret') ||
+        lowerKey.includes('password') ||
+        lowerKey.includes('api_key') ||
+        lowerKey.includes('apikey') ||
+        lowerKey === 'authorization';
+
+      return [key, isSensitive && value ? '***' : value];
+    }),
+  );
+}
+
+function publicServerConfig(config: MCPServerConfig): MCPServerConfig {
+  if (config.type === 'stdio' || 'command' in config) {
+    const stdioConfig = config as STDIOServerConfig;
+
+    return {
+      ...stdioConfig,
+      type: 'stdio',
+      env: maskSensitiveRecord(stdioConfig.env),
+    };
+  }
+
+  const remoteConfig = config as SSEServerConfig | StreamableHTTPServerConfig;
+
+  return {
+    ...remoteConfig,
+    headers: maskSensitiveRecord(remoteConfig.headers),
+  };
+}
+
+export function publicMCPServerTools(serverTools: MCPServerTools): PublicMCPServerTools {
+  return Object.fromEntries(
+    Object.entries(serverTools).map(([serverName, server]) => {
+      const base = {
+        config: publicServerConfig(server.config),
+      };
+
+      if (server.status === 'available') {
+        return [
+          serverName,
+          {
+            ...base,
+            status: 'available',
+            tools: server.tools,
+          },
+        ];
+      }
+
+      return [
+        serverName,
+        {
+          ...base,
+          status: 'unavailable',
+          error: server.error,
+        },
+      ];
+    }),
+  ) as PublicMCPServerTools;
+}
+
+function publicMCPConfig(config: MCPConfig): MCPConfig {
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).map(([serverName, serverConfig]) => [serverName, publicServerConfig(serverConfig)]),
+    ),
+  };
+}
 
 export class MCPService {
   private static _instance: MCPService;
@@ -160,12 +321,22 @@ export class MCPService {
     }
   }
 
-  async updateConfig(config: MCPConfig) {
-    logger.debug('updating config', JSON.stringify(config));
-    this._config = config;
+  async updateConfig(config: MCPConfig, env?: EnvRecord) {
+    const mergedConfig = mergeMCPConfigs(buildServerMCPConfig(env), config);
+
+    logger.debug('updating config', JSON.stringify(publicMCPConfig(mergedConfig)));
+    this._config = mergedConfig;
     await this._createClients();
 
     return this._mcpToolsPerServer;
+  }
+
+  async ensureConfigured(env?: EnvRecord) {
+    if (Object.keys(this._config.mcpServers).length > 0) {
+      return this._mcpToolsPerServer;
+    }
+
+    return this.updateConfig({ mcpServers: {} }, env);
   }
 
   private async _createStreamableHTTPClient(

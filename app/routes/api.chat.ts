@@ -22,6 +22,12 @@ export async function action(args: ActionFunctionArgs) {
 
 const logger = createScopedLogger('api.chat');
 
+function canUseMCP(request: Request) {
+  const role = request.headers.get('x-bolt-auth-role');
+
+  return !role || role === 'admin';
+}
+
 async function chatAction({ context, request }: ActionFunctionArgs) {
   const streamRecovery = new StreamRecoveryManager({
     timeout: 45000,
@@ -66,6 +72,12 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
 
   try {
     const mcpService = MCPService.getInstance();
+    const mcpAllowed = canUseMCP(request);
+
+    if (mcpAllowed) {
+      await mcpService.ensureConfigured(context.cloudflare?.env);
+    }
+
     const totalMessageContent = messages.reduce((acc, message) => acc + message.content, '');
     logger.debug(`Total message length: ${totalMessageContent.split(' ').length}, words`);
 
@@ -80,7 +92,7 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
         let summary: string | undefined = undefined;
         let messageSliceId = 0;
 
-        const processedMessages = await mcpService.processToolInvocations(messages, dataStream);
+        const processedMessages = mcpAllowed ? await mcpService.processToolInvocations(messages, dataStream) : messages;
 
         if (processedMessages.length > 3) {
           messageSliceId = processedMessages.length - 3;
@@ -191,12 +203,14 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
         const options: StreamingOptions = {
           supabaseConnection: supabase,
           toolChoice: 'auto',
-          tools: mcpService.toolsWithoutExecute,
+          tools: mcpAllowed ? mcpService.toolsWithoutExecute : {},
           maxSteps: maxLLMSteps,
           onStepFinish: ({ toolCalls }) => {
             // add tool call annotations for frontend processing
             toolCalls.forEach((toolCall) => {
-              mcpService.processToolCall(toolCall, dataStream);
+              if (mcpAllowed) {
+                mcpService.processToolCall(toolCall, dataStream);
+              }
             });
           },
           onFinish: async ({ text: content, finishReason, usage }) => {
