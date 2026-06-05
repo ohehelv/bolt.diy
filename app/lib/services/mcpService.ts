@@ -132,23 +132,49 @@ function isEnabled(value: string, defaultValue = true) {
   return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
 }
 
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, '');
+}
+
+function shouldUseLocalBridge(env?: EnvRecord) {
+  const bridgeEnabled = readEnv(env, 'MCP_BRIDGE_ENABLED');
+
+  if (bridgeEnabled) {
+    return isEnabled(bridgeEnabled, true);
+  }
+
+  return Boolean(readEnv(env, 'MCP_BRIDGE_BASE_URL') || readEnv(env, 'RUNNING_IN_DOCKER'));
+}
+
+function bridgeServerConfig(env: EnvRecord | undefined, serverName: string): StreamableHTTPServerConfig {
+  const baseUrl = trimTrailingSlash(readEnv(env, 'MCP_BRIDGE_BASE_URL') || 'http://127.0.0.1:3000/__bolt-mcp');
+
+  return {
+    type: 'streamable-http',
+    url: `${baseUrl}/${serverName}`,
+  };
+}
+
 export function buildServerMCPConfig(env?: EnvRecord): MCPConfig {
   const mcpServers: MCPConfig['mcpServers'] = {};
+  const useLocalBridge = shouldUseLocalBridge(env);
 
   if (isEnabled(readEnv(env, 'MCP_CONTEXT7_ENABLED'), true)) {
     const context7Args = ['-y', readEnv(env, 'MCP_CONTEXT7_PACKAGE') || '@upstash/context7-mcp@latest'];
     const context7ApiKey = readEnv(env, 'CONTEXT7_API_KEY');
 
-    mcpServers.context7 = {
-      type: 'stdio',
-      command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
-      args: context7Args,
-      env: context7ApiKey
-        ? {
-            CONTEXT7_API_KEY: context7ApiKey,
-          }
-        : undefined,
-    };
+    mcpServers.context7 = useLocalBridge
+      ? bridgeServerConfig(env, 'context7')
+      : {
+          type: 'stdio',
+          command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
+          args: context7Args,
+          env: context7ApiKey
+            ? {
+                CONTEXT7_API_KEY: context7ApiKey,
+              }
+            : undefined,
+        };
   }
 
   if (isEnabled(readEnv(env, 'MCP_COOLIFY_ENABLED'), true)) {
@@ -160,15 +186,17 @@ export function buildServerMCPConfig(env?: EnvRecord): MCPConfig {
       readEnv(env, 'COOLIFY_ACCESS_TOKEN');
 
     if (baseUrl && token) {
-      mcpServers.coolify = {
-        type: 'stdio',
-        command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
-        args: ['-y', readEnv(env, 'MCP_COOLIFY_PACKAGE') || 'coolify-mcp-server@latest'],
-        env: {
-          COOLIFY_BASE_URL: baseUrl,
-          COOLIFY_TOKEN: token,
-        },
-      };
+      mcpServers.coolify = useLocalBridge
+        ? bridgeServerConfig(env, 'coolify')
+        : {
+            type: 'stdio',
+            command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
+            args: ['-y', readEnv(env, 'MCP_COOLIFY_PACKAGE') || 'coolify-mcp-server@latest'],
+            env: {
+              COOLIFY_BASE_URL: baseUrl,
+              COOLIFY_TOKEN: token,
+            },
+          };
     }
   }
 
@@ -178,8 +206,8 @@ export function buildServerMCPConfig(env?: EnvRecord): MCPConfig {
 function mergeMCPConfigs(serverConfig: MCPConfig, userConfig: MCPConfig): MCPConfig {
   return {
     mcpServers: {
-      ...serverConfig.mcpServers,
       ...(userConfig?.mcpServers || {}),
+      ...serverConfig.mcpServers,
     },
   };
 }

@@ -19,6 +19,8 @@ interface Env {
   XAI_API_KEY: string;
   PERPLEXITY_API_KEY: string;
   AWS_BEDROCK_CONFIG: string;
+  MCP_BRIDGE_ENABLED: string;
+  MCP_BRIDGE_BASE_URL: string;
   MCP_NPX_COMMAND: string;
   MCP_CONTEXT7_ENABLED: string;
   MCP_CONTEXT7_PACKAGE: string;

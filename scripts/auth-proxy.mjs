@@ -1,8 +1,13 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Readable } from 'node:stream';
+import { Client as MCPClient } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Server as MCPProtocolServer } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { CallToolRequestSchema, isInitializeRequest, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const upstream = process.env.BOLT_UPSTREAM || 'http://127.0.0.1:5173';
 const port = Number(process.env.AUTH_PROXY_PORT || process.env.PORT || 3000);
@@ -12,6 +17,7 @@ const secretPath = join(dataDir, 'session-secret');
 const cookieName = process.env.AUTH_COOKIE_NAME || 'bolt_session';
 const sessionTtlSeconds = Number(process.env.AUTH_SESSION_TTL_SECONDS || 7 * 24 * 60 * 60);
 const maxBodyBytes = 32 * 1024;
+const mcpBridgeMaxBodyBytes = Number(process.env.MCP_BRIDGE_MAX_BODY_BYTES || 4 * 1024 * 1024);
 
 mkdirSync(dataDir, { recursive: true });
 
@@ -41,6 +47,237 @@ function readSecret() {
 }
 
 const sessionSecret = readSecret();
+const mcpBridgeUpstreams = new Map();
+const mcpBridgeSessions = new Map();
+
+function envValue(key) {
+  return String(process.env[key] || '').trim();
+}
+
+function envEnabled(key, defaultValue = true) {
+  const value = envValue(key);
+
+  if (!value) {
+    return defaultValue;
+  }
+
+  return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
+}
+
+function mcpBridgeServerConfig(serverName) {
+  const npxCommand = envValue('MCP_NPX_COMMAND') || 'npx';
+
+  if (serverName === 'context7' && envEnabled('MCP_CONTEXT7_ENABLED', true)) {
+    const context7ApiKey = envValue('CONTEXT7_API_KEY');
+
+    return {
+      command: npxCommand,
+      args: ['-y', envValue('MCP_CONTEXT7_PACKAGE') || '@upstash/context7-mcp@latest'],
+      env: context7ApiKey
+        ? {
+            CONTEXT7_API_KEY: context7ApiKey,
+          }
+        : undefined,
+    };
+  }
+
+  if (serverName === 'coolify' && envEnabled('MCP_COOLIFY_ENABLED', true)) {
+    const baseUrl = envValue('MCP_COOLIFY_BASE_URL') || envValue('COOLIFY_BASE_URL');
+    const token =
+      envValue('MCP_COOLIFY_TOKEN') ||
+      envValue('COOLIFY_TOKEN') ||
+      envValue('COOLIFY_API_TOKEN') ||
+      envValue('COOLIFY_ACCESS_TOKEN');
+
+    if (baseUrl && token) {
+      return {
+        command: npxCommand,
+        args: ['-y', envValue('MCP_COOLIFY_PACKAGE') || 'coolify-mcp-server@latest'],
+        env: {
+          COOLIFY_BASE_URL: baseUrl,
+          COOLIFY_TOKEN: token,
+        },
+      };
+    }
+  }
+
+  return null;
+}
+
+function sanitizeMCPBridgeLog(value) {
+  let text = String(value || '');
+
+  for (const key of [
+    'MCP_COOLIFY_TOKEN',
+    'COOLIFY_TOKEN',
+    'COOLIFY_API_TOKEN',
+    'COOLIFY_ACCESS_TOKEN',
+    'CONTEXT7_API_KEY',
+  ]) {
+    const secret = envValue(key);
+
+    if (secret) {
+      text = text.split(secret).join('***');
+    }
+  }
+
+  return text.trim().slice(0, 2000);
+}
+
+async function createMCPBridgeUpstream(serverName) {
+  const config = mcpBridgeServerConfig(serverName);
+
+  if (!config) {
+    throw new Error(`MCP bridge server "${serverName}" is not configured`);
+  }
+
+  console.log(`Starting MCP bridge upstream "${serverName}" with command "${config.command}"`);
+
+  const transport = new StdioClientTransport({
+    command: config.command,
+    args: config.args,
+    cwd: config.cwd,
+    env: {
+      ...process.env,
+      ...(config.env || {}),
+    },
+    stderr: 'pipe',
+  });
+
+  const stderr = transport.stderr;
+
+  if (stderr) {
+    stderr.on('data', (chunk) => {
+      const sanitized = sanitizeMCPBridgeLog(chunk);
+
+      if (sanitized) {
+        console.error(`[mcp-bridge:${serverName}] ${sanitized}`);
+      }
+    });
+  }
+
+  const client = new MCPClient({
+    name: `bolt-mcp-bridge-${serverName}`,
+    version: '1.0.0',
+  });
+
+  transport.onclose = () => {
+    mcpBridgeUpstreams.delete(serverName);
+    console.log(`MCP bridge upstream "${serverName}" closed`);
+  };
+  transport.onerror = (error) => {
+    console.error(`MCP bridge upstream "${serverName}" error:`, error);
+  };
+
+  await client.connect(transport);
+
+  return { client, transport };
+}
+
+async function getMCPBridgeUpstream(serverName) {
+  const existing = mcpBridgeUpstreams.get(serverName);
+
+  if (existing) {
+    return existing;
+  }
+
+  const pending = createMCPBridgeUpstream(serverName).catch((error) => {
+    mcpBridgeUpstreams.delete(serverName);
+    throw error;
+  });
+
+  mcpBridgeUpstreams.set(serverName, pending);
+
+  return pending;
+}
+
+function requestHeader(request, name) {
+  const value = request.headers[name.toLowerCase()];
+
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function isLoopbackAddress(value) {
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(String(value || ''));
+}
+
+function isLocalMCPBridgeRequest(request) {
+  return isLoopbackAddress(request.socket?.remoteAddress);
+}
+
+function requestContainsInitialize(body) {
+  const messages = Array.isArray(body) ? body : [body];
+
+  return messages.some((message) => {
+    try {
+      return isInitializeRequest(message);
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function createMCPBridgeSession(serverName) {
+  let sessionId = '';
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    enableJsonResponse: true,
+    onsessioninitialized: (id) => {
+      sessionId = id;
+      mcpBridgeSessions.set(id, session);
+    },
+    onsessionclosed: (id) => {
+      mcpBridgeSessions.delete(id);
+    },
+  });
+
+  const protocolServer = new MCPProtocolServer(
+    {
+      name: `bolt-mcp-bridge-${serverName}`,
+      version: '1.0.0',
+    },
+    {
+      capabilities: {
+        tools: {},
+      },
+    },
+  );
+
+  protocolServer.setRequestHandler(ListToolsRequestSchema, async (request) => {
+    const upstream = await getMCPBridgeUpstream(serverName);
+
+    return upstream.client.listTools(request.params);
+  });
+
+  protocolServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const upstream = await getMCPBridgeUpstream(serverName);
+
+    return upstream.client.callTool(request.params);
+  });
+
+  const session = {
+    serverName,
+    transport,
+    protocolServer,
+  };
+
+  transport.onclose = () => {
+    if (sessionId) {
+      mcpBridgeSessions.delete(sessionId);
+    }
+
+    protocolServer.close().catch((error) => {
+      console.error(`Failed to close MCP bridge session "${serverName}":`, error);
+    });
+  };
+  transport.onerror = (error) => {
+    console.error(`MCP bridge transport "${serverName}" error:`, error);
+  };
+
+  await protocolServer.connect(transport);
+
+  return session;
+}
 
 function readUsers() {
   if (!existsSync(usersPath)) {
@@ -485,7 +722,7 @@ function injectLogout(html, user) {
   return `${nextHtml}${widget}`;
 }
 
-function readBody(request) {
+function readBody(request, limit = maxBodyBytes) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
@@ -493,7 +730,7 @@ function readBody(request) {
     request.on('data', (chunk) => {
       total += chunk.length;
 
-      if (total > maxBodyBytes) {
+      if (total > limit) {
         reject(new Error('Request body too large'));
         request.destroy();
         return;
@@ -718,6 +955,90 @@ function sanitizeClientJsonCookies(cookieHeader = '') {
   return kept.join('; ');
 }
 
+async function handleMCPBridge(request, res, url) {
+  if (!isLocalMCPBridgeRequest(request)) {
+    send(res, 404, 'Not found');
+    return;
+  }
+
+  const serverName = decodeURIComponent(url.pathname.slice('/__bolt-mcp/'.length).split('/')[0] || '');
+
+  if (!serverName || !mcpBridgeServerConfig(serverName)) {
+    send(res, 404, 'MCP bridge server not configured');
+    return;
+  }
+
+  const sessionId = requestHeader(request, 'mcp-session-id');
+  const existingSession = sessionId ? mcpBridgeSessions.get(sessionId) : null;
+
+  if (request.method === 'GET' || request.method === 'DELETE') {
+    if (!existingSession || existingSession.serverName !== serverName) {
+      send(res, 405, 'Method not allowed');
+      return;
+    }
+
+    await existingSession.transport.handleRequest(request, res);
+    return;
+  }
+
+  if (request.method !== 'POST') {
+    send(res, 405, 'Method not allowed');
+    return;
+  }
+
+  let parsedBody;
+
+  try {
+    parsedBody = JSON.parse(await readBody(request, mcpBridgeMaxBodyBytes));
+  } catch (error) {
+    send(
+      res,
+      400,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        error: {
+          code: -32700,
+          message: 'Parse error',
+          data: String(error),
+        },
+        id: null,
+      }),
+      { 'Content-Type': 'application/json' },
+    );
+    return;
+  }
+
+  let session = existingSession;
+
+  if (session && session.serverName !== serverName) {
+    send(res, 404, 'MCP bridge session not found');
+    return;
+  }
+
+  if (!session) {
+    if (!requestContainsInitialize(parsedBody)) {
+      send(
+        res,
+        400,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: No valid MCP session',
+          },
+          id: null,
+        }),
+        { 'Content-Type': 'application/json' },
+      );
+      return;
+    }
+
+    session = await createMCPBridgeSession(serverName);
+  }
+
+  await session.transport.handleRequest(request, res, parsedBody);
+}
+
 function copyRequestHeaders(request) {
   const headers = new Headers();
   const skip = new Set([
@@ -862,6 +1183,11 @@ const server = createServer(async (request, res) => {
   const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
 
   try {
+    if (url.pathname.startsWith('/__bolt-mcp/')) {
+      await handleMCPBridge(request, res, url);
+      return;
+    }
+
     if (url.pathname.startsWith('/auth/')) {
       await handleAuth(request, res, url.pathname);
       return;
