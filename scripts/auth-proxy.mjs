@@ -105,6 +105,82 @@ function verifyPassword(password, storedHash) {
   return expectedBuffer.length === actual.length && timingSafeEqual(expectedBuffer, actual);
 }
 
+function bootstrapPasswordHash() {
+  const encodedHash = String(
+    process.env.AUTH_ADMIN_PASSWORD_HASH_B64 || process.env.AUTH_BOOTSTRAP_PASSWORD_HASH_B64 || '',
+  ).trim();
+
+  if (encodedHash) {
+    return Buffer.from(encodedHash, 'base64url').toString('utf8');
+  }
+
+  const configuredHash = String(process.env.AUTH_ADMIN_PASSWORD_HASH || process.env.AUTH_BOOTSTRAP_PASSWORD_HASH || '').trim();
+
+  if (configuredHash) {
+    return configuredHash;
+  }
+
+  const configuredPassword = String(process.env.AUTH_ADMIN_PASSWORD || process.env.AUTH_BOOTSTRAP_PASSWORD || '');
+
+  if (configuredPassword) {
+    return hashPassword(configuredPassword);
+  }
+
+  return '';
+}
+
+function ensureBootstrapAdmin() {
+  const passwordHash = bootstrapPasswordHash();
+
+  if (!passwordHash) {
+    return;
+  }
+
+  const login = normalizeLogin(process.env.AUTH_ADMIN_LOGIN || process.env.AUTH_BOOTSTRAP_LOGIN || 'admin');
+
+  if (login.length < 3) {
+    throw new Error('AUTH_ADMIN_LOGIN must be at least 3 characters');
+  }
+
+  const syncExisting = process.env.AUTH_ADMIN_SYNC === 'true' || process.env.AUTH_BOOTSTRAP_SYNC === 'true';
+  const store = readUsers();
+  const existingIndex = store.users.findIndex((item) => item.login === login);
+  const now = new Date().toISOString();
+
+  if (existingIndex >= 0) {
+    if (!syncExisting) {
+      return;
+    }
+
+    store.users[existingIndex] = {
+      ...store.users[existingIndex],
+      role: 'admin',
+      passwordHash,
+      updatedAt: now,
+    };
+    writeUsers(store);
+    console.log(`Synced bootstrap admin ${login}`);
+
+    return;
+  }
+
+  if (store.users.length > 0 && process.env.AUTH_ADMIN_CREATE_IF_MISSING === 'false') {
+    return;
+  }
+
+  store.users.push({
+    id: randomBytes(16).toString('base64url'),
+    login,
+    role: 'admin',
+    passwordHash,
+    createdAt: now,
+  });
+  writeUsers(store);
+  console.log(`Created bootstrap admin ${login}`);
+}
+
+ensureBootstrapAdmin();
+
 function signPayload(payload) {
   return createHmac('sha256', sessionSecret).update(payload).digest('base64url');
 }
@@ -254,7 +330,7 @@ function publicAsset(pathname) {
 
 function page(title, content) {
   return `<!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -292,10 +368,10 @@ function escapeHtml(value) {
 
 function authForm({ mode, error = '' }) {
   const isRegister = mode === 'register';
-  const title = isRegister ? 'Create admin account' : 'Sign in to Bolt';
+  const title = isRegister ? 'Создать администратора' : 'Вход в Bolt';
   const description = isRegister
-    ? 'This is the first registration. The created account will become the administrator.'
-    : 'Use your administrator account to continue.';
+    ? 'Это первая регистрация. Созданный пользователь станет администратором.'
+    : 'Войди под администратором, чтобы продолжить.';
   const action = isRegister ? '/auth/register' : '/auth/login';
 
   return page(
@@ -306,19 +382,19 @@ function authForm({ mode, error = '' }) {
       ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
       <form method="post" action="${action}">
         <label>
-          Login or email
+          Логин или email
           <input name="login" autocomplete="username" required autofocus />
         </label>
         <label>
-          Password
+          Пароль
           <input name="password" type="password" autocomplete="${isRegister ? 'new-password' : 'current-password'}" minlength="8" required />
         </label>
-        <button type="submit">${isRegister ? 'Create admin' : 'Sign in'}</button>
+        <button type="submit">${isRegister ? 'Создать админа' : 'Войти'}</button>
       </form>
       ${
         isRegister
           ? ''
-          : '<p class="hint">No admin yet? Open <a href="/auth/register">first registration</a>.</p>'
+          : '<p class="hint">Админа ещё нет? Открой <a href="/auth/register">первую регистрацию</a>.</p>'
       }
     `,
   );
@@ -524,7 +600,18 @@ function unauthorized(request, res) {
 
 function copyRequestHeaders(request) {
   const headers = new Headers();
-  const skip = new Set(['connection', 'host', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
+  const skip = new Set([
+    'accept-encoding',
+    'connection',
+    'host',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ]);
 
   for (const [key, value] of Object.entries(request.headers)) {
     if (!value || skip.has(key.toLowerCase())) {
@@ -610,6 +697,8 @@ function copyResponseHeaders(response, options = {}) {
 
     headers[key] = value;
   }
+
+  headers['Cache-Control'] = 'no-store';
 
   if (typeof response.headers.getSetCookie === 'function') {
     const cookies = response.headers.getSetCookie();

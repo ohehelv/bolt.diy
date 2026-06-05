@@ -240,8 +240,18 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
 
       try {
         const response = await fetch(`/api/models/${encodeURIComponent(providerName)}`);
+        if (!response.ok) {
+          throw new Error(`Model list request failed with HTTP ${response.status}`);
+        }
+
         const data = await response.json();
-        providerModels = (data as { modelList: ModelInfo[] }).modelList;
+        const nextModels = (data as { modelList?: ModelInfo[] }).modelList;
+
+        if (!Array.isArray(nextModels)) {
+          throw new Error('Model list response did not include modelList');
+        }
+
+        providerModels = nextModels;
       } catch (error) {
         console.error('Error loading dynamic models for:', providerName, error);
       }
@@ -249,7 +259,9 @@ export const BaseChat = React.forwardRef<HTMLDivElement, BaseChatProps>(
       // Only update models for the specific provider
       setModelList((prevModels) => {
         const otherModels = prevModels.filter((model) => model.provider !== providerName);
-        return [...otherModels, ...providerModels];
+        const fallbackModels = prevModels.filter((model) => model.provider === providerName);
+
+        return [...otherModels, ...(providerModels.length > 0 ? providerModels : fallbackModels)];
       });
       setIsModelLoading(undefined);
     };

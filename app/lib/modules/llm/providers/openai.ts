@@ -67,9 +67,16 @@ export default class OpenAIProvider extends BaseProvider {
       headers: {
         Authorization: `Bearer ${apiKey}`,
       },
+      signal: this.createTimeoutSignal(),
     });
 
-    const res = (await response.json()) as any;
+    const res = (await response.json().catch(() => ({}))) as any;
+
+    if (!response.ok || !Array.isArray(res.data)) {
+      const message = res?.error?.message || `OpenAI models request failed with HTTP ${response.status}`;
+      throw new Error(message);
+    }
+
     const staticModelIds = this.staticModels.map((m) => m.name);
 
     const data = res.data.filter(
