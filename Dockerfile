@@ -66,15 +66,18 @@ COPY --from=prod-deps /app/build /app/build
 COPY --from=prod-deps /app/node_modules /app/node_modules
 COPY --from=prod-deps /app/package.json /app/package.json
 COPY --from=prod-deps /app/bindings.sh /app/bindings.sh
+COPY --from=prod-deps /app/scripts/auth-proxy.mjs /app/scripts/auth-proxy.mjs
+COPY --from=prod-deps /app/scripts/start-auth-proxy.sh /app/scripts/start-auth-proxy.sh
 
 # Pre-configure wrangler to disable metrics
 RUN mkdir -p /root/.config/.wrangler && \
     echo '{"enabled":false}' > /root/.config/.wrangler/metrics.json
 
-# Make bindings script executable
-RUN chmod +x /app/bindings.sh
+# Make runtime scripts executable and keep wrangler available after prod pruning.
+RUN chmod +x /app/bindings.sh /app/scripts/start-auth-proxy.sh \
+  && npm install -g wrangler@4.44.0
 
-EXPOSE 5173
+EXPOSE 5173 3000
 
 # Healthcheck for deployment platforms
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
