@@ -19,4 +19,16 @@ interface Env {
   XAI_API_KEY: string;
   PERPLEXITY_API_KEY: string;
   AWS_BEDROCK_CONFIG: string;
+  MCP_NPX_COMMAND: string;
+  MCP_CONTEXT7_ENABLED: string;
+  MCP_CONTEXT7_PACKAGE: string;
+  CONTEXT7_API_KEY: string;
+  MCP_COOLIFY_ENABLED: string;
+  MCP_COOLIFY_BASE_URL: string;
+  MCP_COOLIFY_PACKAGE: string;
+  MCP_COOLIFY_TOKEN: string;
+  COOLIFY_BASE_URL: string;
+  COOLIFY_TOKEN: string;
+  COOLIFY_API_TOKEN: string;
+  COOLIFY_ACCESS_TOKEN: string;
 }
