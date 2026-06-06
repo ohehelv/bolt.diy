@@ -136,9 +136,28 @@ export default class AnthropicProvider extends BaseProvider {
       betas.push('context-1m-2025-08-07');
     }
 
+    /*
+     * Claude 4.x reject the `temperature` parameter ("`temperature` is deprecated for this model").
+     * The AI SDK v4 always injects a temperature, so strip it from the outgoing request body here.
+     */
+    const stripTemperatureFetch: typeof fetch = async (input, init) => {
+      if (init?.body && typeof init.body === 'string' && /claude-(opus|sonnet|haiku)-4/i.test(model)) {
+        try {
+          const payload = JSON.parse(init.body);
+          delete payload.temperature;
+          init = { ...init, body: JSON.stringify(payload) };
+        } catch {
+          // body is not JSON we can rewrite — forward it unchanged
+        }
+      }
+
+      return fetch(input, init);
+    };
+
     const anthropic = createAnthropic({
       apiKey,
       headers: { 'anthropic-beta': betas.join(',') },
+      fetch: stripTemperatureFetch,
     });
 
     return anthropic(model);
