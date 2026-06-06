@@ -296,6 +296,9 @@ export class MCPService {
   private _toolsWithoutExecute: ToolSet = {};
   private _mcpToolsPerServer: MCPServerTools = {};
   private _toolNamesToServerNames = new Map<string, string>();
+  private _userConfig: MCPConfig = {
+    mcpServers: {},
+  };
   private _config: MCPConfig = {
     mcpServers: {},
   };
@@ -350,21 +353,28 @@ export class MCPService {
   }
 
   async updateConfig(config: MCPConfig, env?: EnvRecord) {
+    this._userConfig = config;
+
     const mergedConfig = mergeMCPConfigs(buildServerMCPConfig(env), config);
+    const reuseClientsAcrossRequests = !shouldUseLocalBridge(env);
 
     logger.debug('updating config', JSON.stringify(publicMCPConfig(mergedConfig)));
     this._config = mergedConfig;
-    await this._createClients();
+    await this._createClients({ closeExistingClients: reuseClientsAcrossRequests });
 
     return this._mcpToolsPerServer;
   }
 
   async ensureConfigured(env?: EnvRecord) {
+    if (shouldUseLocalBridge(env)) {
+      return this.updateConfig(this._userConfig, env);
+    }
+
     if (Object.keys(this._config.mcpServers).length > 0) {
       return this._mcpToolsPerServer;
     }
 
-    return this.updateConfig({ mcpServers: {} }, env);
+    return this.updateConfig(this._userConfig, env);
   }
 
   private async _createStreamableHTTPClient(
@@ -432,8 +442,8 @@ export class MCPService {
     }
   }
 
-  private async _createClients() {
-    await this._closeClients();
+  private async _createClients(options: { closeExistingClients?: boolean } = {}) {
+    await this._resetClients({ closeExistingClients: options.closeExistingClients ?? true });
 
     const createClientPromises = Object.entries(this._config?.mcpServers || []).map(async ([serverName, config]) => {
       let client: MCPClient | null = null;
@@ -528,7 +538,17 @@ export class MCPService {
     return this._mcpToolsPerServer;
   }
 
-  private async _closeClients(): Promise<void> {
+  private async _resetClients(options: { closeExistingClients?: boolean } = {}): Promise<void> {
+    const closeExistingClients = options.closeExistingClients ?? true;
+
+    if (!closeExistingClients) {
+      this._tools = {};
+      this._toolsWithoutExecute = {};
+      this._mcpToolsPerServer = {};
+      this._toolNamesToServerNames.clear();
+      return;
+    }
+
     const closePromises = Object.entries(this._mcpToolsPerServer).map(async ([serverName, server]) => {
       if (!server.client) {
         return;
