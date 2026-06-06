@@ -584,6 +584,22 @@ export const ChatImpl = memo(
       }
     }, []);
 
+    // [FORK] Запуск шаблона/блока из галереи: получаем готовый промпт и отправляем в чат
+    const sendMessageRef = useRef(sendMessage);
+    sendMessageRef.current = sendMessage;
+    useEffect(() => {
+      const handler = (event: Event) => {
+        const text = (event as CustomEvent<string>).detail;
+
+        if (text) {
+          sendMessageRef.current({} as React.UIEvent, text);
+        }
+      };
+      window.addEventListener('bolt:send-prompt', handler);
+
+      return () => window.removeEventListener('bolt:send-prompt', handler);
+    }, []);
+
     const handleModelChange = (newModel: string) => {
       setModel(newModel);
       Cookies.set('selectedModel', newModel, { expires: 30 });
