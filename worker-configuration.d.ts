@@ -33,4 +33,7 @@ interface Env {
   COOLIFY_TOKEN: string;
   COOLIFY_API_TOKEN: string;
   COOLIFY_ACCESS_TOKEN: string;
+  MCP_PERPLEXITY_ENABLED: string;
+  MCP_PERPLEXITY_PACKAGE: string;
+  MCP_PERPLEXITY_API_KEY: string;
 }

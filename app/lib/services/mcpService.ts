@@ -196,6 +196,23 @@ export function buildServerMCPConfig(env?: EnvRecord): MCPConfig {
               COOLIFY_BASE_URL: baseUrl,
               COOLIFY_TOKEN: token,
             },
+      };
+    }
+  }
+
+  if (isEnabled(readEnv(env, 'MCP_PERPLEXITY_ENABLED'), true)) {
+    const apiKey = readEnv(env, 'MCP_PERPLEXITY_API_KEY') || readEnv(env, 'PERPLEXITY_API_KEY');
+
+    if (apiKey) {
+      mcpServers.perplexity = useLocalBridge
+        ? bridgeServerConfig(env, 'perplexity')
+        : {
+            type: 'stdio',
+            command: readEnv(env, 'MCP_NPX_COMMAND') || 'npx',
+            args: ['-y', readEnv(env, 'MCP_PERPLEXITY_PACKAGE') || '@perplexity-ai/mcp-server'],
+            env: {
+              PERPLEXITY_API_KEY: apiKey,
+            },
           };
     }
   }

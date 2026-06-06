@@ -101,6 +101,20 @@ function mcpBridgeServerConfig(serverName) {
     }
   }
 
+  if (serverName === 'perplexity' && envEnabled('MCP_PERPLEXITY_ENABLED', true)) {
+    const apiKey = envValue('MCP_PERPLEXITY_API_KEY') || envValue('PERPLEXITY_API_KEY');
+
+    if (apiKey) {
+      return {
+        command: npxCommand,
+        args: ['-y', envValue('MCP_PERPLEXITY_PACKAGE') || '@perplexity-ai/mcp-server'],
+        env: {
+          PERPLEXITY_API_KEY: apiKey,
+        },
+      };
+    }
+  }
+
   return null;
 }
 
@@ -113,6 +127,8 @@ function sanitizeMCPBridgeLog(value) {
     'COOLIFY_API_TOKEN',
     'COOLIFY_ACCESS_TOKEN',
     'CONTEXT7_API_KEY',
+    'MCP_PERPLEXITY_API_KEY',
+    'PERPLEXITY_API_KEY',
   ]) {
     const secret = envValue(key);
 
