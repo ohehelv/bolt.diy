@@ -1,6 +1,7 @@
 import { generateText, type CoreTool, type GenerateTextResult, type Message } from 'ai';
 import type { IProviderSetting } from '~/types/model';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, PROVIDER_LIST } from '~/utils/constants';
+import { isReasoningModel, requiresTemperatureOne } from './constants';
 import { extractCurrentContext, extractPropertiesFromMessage, simplifyBoltActions } from './utils';
 import { createScopedLogger } from '~/utils/logger';
 import { LLMManager } from '~/lib/modules/llm/manager';
@@ -185,6 +186,11 @@ Please provide a summary of the chat till now including the hitorical summary of
       apiKeys,
       providerSettings,
     }),
+
+    // Claude 4.x / reasoning models reject the AI SDK default of temperature: 0
+    ...(isReasoningModel(currentModel) || requiresTemperatureOne(provider.name, currentModel)
+      ? { temperature: 1 }
+      : {}),
   });
 
   const response = resp.text;

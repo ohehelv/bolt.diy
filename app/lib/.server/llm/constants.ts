@@ -38,6 +38,15 @@ export function isReasoningModel(modelName: string): boolean {
   return /^(o1|o3|o4|gpt-5)/i.test(modelName);
 }
 
+/*
+ * Models that reject `temperature: 0` (the AI SDK v4 default) and require `temperature: 1`.
+ * Anthropic's reasoning-first Claude 4.x models return "`temperature` is deprecated for this model"
+ * when sent temperature: 0, so they must be treated like OpenAI reasoning models.
+ */
+export function requiresTemperatureOne(provider: string, modelName: string): boolean {
+  return provider === 'Anthropic' && /claude-(opus|sonnet|haiku)-4/i.test(modelName);
+}
+
 // limits the number of model responses that can be returned in a single request
 export const MAX_RESPONSE_SEGMENTS = 2;
 

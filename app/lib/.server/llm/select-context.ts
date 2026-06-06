@@ -1,7 +1,7 @@
 import { generateText, type CoreTool, type GenerateTextResult, type Message } from 'ai';
 import ignore from 'ignore';
 import type { IProviderSetting } from '~/types/model';
-import { IGNORE_PATTERNS, type FileMap } from './constants';
+import { IGNORE_PATTERNS, isReasoningModel, requiresTemperatureOne, type FileMap } from './constants';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, PROVIDER_LIST } from '~/utils/constants';
 import { createFilesContext, extractCurrentContext, extractPropertiesFromMessage, simplifyBoltActions } from './utils';
 import { createScopedLogger } from '~/utils/logger';
@@ -174,6 +174,11 @@ export async function selectContext(props: {
       apiKeys,
       providerSettings,
     }),
+
+    // Claude 4.x / reasoning models reject the AI SDK default of temperature: 0
+    ...(isReasoningModel(currentModel) || requiresTemperatureOne(provider.name, currentModel)
+      ? { temperature: 1 }
+      : {}),
   });
 
   const response = resp.text;

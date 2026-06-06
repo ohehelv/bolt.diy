@@ -1,5 +1,11 @@
 import { convertToCoreMessages, streamText as _streamText, type Message } from 'ai';
-import { MAX_TOKENS, PROVIDER_COMPLETION_LIMITS, isReasoningModel, type FileMap } from './constants';
+import {
+  MAX_TOKENS,
+  PROVIDER_COMPLETION_LIMITS,
+  isReasoningModel,
+  requiresTemperatureOne,
+  type FileMap,
+} from './constants';
 import { getSystemPrompt } from '~/lib/common/prompts/prompts';
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, MODIFICATIONS_TAG_NAME, PROVIDER_LIST, WORK_DIR } from '~/utils/constants';
 import type { IProviderSetting } from '~/types/model';
@@ -223,6 +229,9 @@ export async function streamText(props: {
 
   // Log reasoning model detection and token parameters
   const isReasoning = isReasoningModel(modelDetails.name);
+
+  // Anthropic Claude 4.x reject the SDK's default temperature: 0 and need temperature: 1
+  const needsTemperatureOne = isReasoning || requiresTemperatureOne(provider.name, modelDetails.name);
   logger.info(
     `Model "${modelDetails.name}" is reasoning model: ${isReasoning}, using ${isReasoning ? 'maxCompletionTokens' : 'maxTokens'}: ${safeMaxTokens}`,
   );
@@ -237,9 +246,9 @@ export async function streamText(props: {
   // Use maxCompletionTokens for reasoning models (o1, GPT-5), maxTokens for traditional models
   const tokenParams = isReasoning ? { maxCompletionTokens: safeMaxTokens } : { maxTokens: safeMaxTokens };
 
-  // Filter out unsupported parameters for reasoning models
+  // Filter out unsupported parameters for reasoning / temperature-restricted models
   const filteredOptions =
-    isReasoning && options
+    needsTemperatureOne && options
       ? Object.fromEntries(
           Object.entries(options).filter(
             ([key]) =>
@@ -285,8 +294,8 @@ export async function streamText(props: {
     messages: convertToCoreMessages(processedMessages as any),
     ...filteredOptions,
 
-    // Set temperature to 1 for reasoning models (required by OpenAI API)
-    ...(isReasoning ? { temperature: 1 } : {}),
+    // Set temperature to 1 for reasoning / Claude 4.x models (they reject the SDK default of 0)
+    ...(needsTemperatureOne ? { temperature: 1 } : {}),
   };
 
   // DEBUG: Log final streaming parameters
