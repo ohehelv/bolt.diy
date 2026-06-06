@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { activateI18n } from './i18n/translator';
 import { SetupWizard } from './setup/SetupWizard.client';
+import { ChatResizeHandle } from './layout/ChatResizeHandle';
 
 const LANG_KEY = 'bolt_lang';
 
@@ -49,7 +50,8 @@ export function ForkEnhancements() {
   return (
     <>
       <SetupWizard open={setupOpen} onClose={() => setSetupOpen(false)} />
-      <div data-no-i18n className="fixed bottom-3 left-3 z-50 flex items-center gap-1.5">
+      <ChatResizeHandle />
+      <div data-no-i18n className="fixed bottom-3 right-3 z-50 flex items-center gap-1.5">
         <button
           onClick={openSettings}
           title="Настройки"
