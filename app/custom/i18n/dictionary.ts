@@ -149,4 +149,17 @@ export const RU: Record<string, string> = {
   'Create a cookie consent form using Material UI': 'Создать форму согласия на cookie на Material UI',
   'Make a space invaders game': 'Сделать игру Space Invaders',
   'Make a Tic Tac Toe game in html, css and js only': 'Сделать крестики-нолики на чистых HTML, CSS и JS',
+
+  // --- Панель настроек (заголовок и описания вкладок) ---
+  'Control Panel': 'Панель управления',
+  'Explore new and upcoming features': 'Новые и будущие возможности',
+  'Configure cloud AI providers and models': 'Настройка облачных ИИ-провайдеров и моделей',
+  'Configure local AI providers and models': 'Настройка локальных ИИ-провайдеров и моделей',
+  'Connect and manage GitHub integration': 'Подключение и управление интеграцией GitHub',
+  'Connect and manage GitLab integration': 'Подключение и управление интеграцией GitLab',
+  'Configure Netlify deployment settings': 'Настройка деплоя в Netlify',
+  'Manage Vercel projects and deployments': 'Управление проектами и деплоями Vercel',
+  'Setup Supabase database connection': 'Настройка подключения к базе Supabase',
+  'View and manage your notifications': 'Просмотр и управление уведомлениями',
+  'View system events and logs': 'Системные события и журналы',
 };
