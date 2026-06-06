@@ -303,6 +303,17 @@ export const Menu = () => {
     };
   }, [isSettingsOpen]);
 
+  // [FORK] Открытие настроек по глобальному событию (видимая кнопка-шестерёнка вне сайдбара)
+  useEffect(() => {
+    const openSettings = () => {
+      setIsSettingsOpen(true);
+      setOpen(false);
+    };
+    window.addEventListener('bolt:open-settings', openSettings);
+
+    return () => window.removeEventListener('bolt:open-settings', openSettings);
+  }, []);
+
   const handleDuplicate = async (id: string) => {
     await duplicateCurrentChat(id);
     loadEntries(); // Reload the list after duplication

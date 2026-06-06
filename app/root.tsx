@@ -10,6 +10,7 @@ import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { ClientOnly } from 'remix-utils/client-only';
 import { cssTransition, ToastContainer } from 'react-toastify';
+import { ForkEnhancements } from './custom/ForkEnhancements.client'; // [FORK]
 
 import reactToastifyStyles from 'react-toastify/dist/ReactToastify.css?url';
 import globalStyles from './styles/index.scss?url';
@@ -147,6 +148,7 @@ export default function App() {
   return (
     <Layout>
       <Outlet />
+      <ClientOnly>{() => <ForkEnhancements />}</ClientOnly>{/* [FORK] перевод UI + переключатель языка (рендерится один раз) */}
     </Layout>
   );
 }
