@@ -16,6 +16,7 @@ import { createScopedLogger } from '~/utils/logger';
 import { createFilesContext, extractPropertiesFromMessage } from './utils';
 import { discussPrompt } from '~/lib/common/prompts/discuss-prompt';
 import type { DesignScheme } from '~/types/design-scheme';
+import { MCP_SELF_MANAGEMENT_PROMPT } from '~/custom/mcp/mcpPromptAddon'; // [FORK]
 
 export type Messages = Message[];
 
@@ -289,7 +290,7 @@ export async function streamText(props: {
       apiKeys,
       providerSettings,
     }),
-    system: chatMode === 'build' ? systemPrompt : discussPrompt(),
+    system: (chatMode === 'build' ? systemPrompt : discussPrompt()) + MCP_SELF_MANAGEMENT_PROMPT, // [FORK] подсказка про bolt_mcp_*
     ...tokenParams,
     messages: convertToCoreMessages(processedMessages as any),
     ...filteredOptions,

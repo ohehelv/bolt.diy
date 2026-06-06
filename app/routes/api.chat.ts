@@ -203,7 +203,7 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
         const options: StreamingOptions = {
           supabaseConnection: supabase,
           toolChoice: 'auto',
-          tools: mcpAllowed ? mcpService.toolsWithoutExecute : {},
+          tools: mcpAllowed ? mcpService.toolsForModel : {}, // [FORK] вкл. встроенные инструменты самоуправления MCP
           maxSteps: maxLLMSteps,
           onStepFinish: ({ toolCalls }) => {
             // add tool call annotations for frontend processing

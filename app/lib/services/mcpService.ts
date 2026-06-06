@@ -17,6 +17,9 @@ import {
   TOOL_NO_EXECUTE_FUNCTION,
 } from '~/utils/constants';
 import { createScopedLogger } from '~/utils/logger';
+import { recordMcpToolError, explainMcpError, sanitizeMcpErrorMessage } from '~/custom/mcp/errorRegistry'; // [FORK]
+import { createManagementTools } from '~/custom/mcp/managementTools'; // [FORK]
+import { toWindowsSafeStdioConfig } from '~/custom/mcp/stdioWindows'; // [FORK]
 
 const logger = createScopedLogger('mcp-service');
 
@@ -320,6 +323,10 @@ export class MCPService {
     mcpServers: {},
   };
 
+  // [FORK] Встроенные read-only инструменты управления MCP и последний env для перенастройки из инструментов
+  private _builtinReadTools: ToolSet = {};
+  private _lastEnv: EnvRecord | undefined;
+
   static getInstance(): MCPService {
     if (!MCPService._instance) {
       MCPService._instance = new MCPService();
@@ -371,6 +378,7 @@ export class MCPService {
 
   async updateConfig(config: MCPConfig, env?: EnvRecord) {
     this._userConfig = config;
+    this._lastEnv = env; // [FORK] запоминаем env, чтобы инструменты управления могли перенастроить серверы
 
     const mergedConfig = mergeMCPConfigs(buildServerMCPConfig(env), config);
     const reuseClientsAcrossRequests = !shouldUseLocalBridge(env);
@@ -422,11 +430,13 @@ export class MCPService {
   }
 
   private async _createStdioClient(serverName: string, config: STDIOServerConfig): Promise<MCPClient> {
+    // [FORK] На Windows запускаем через cmd /c, иначе spawn('npx', ...) падает с ENOENT
+    const safeConfig = toWindowsSafeStdioConfig(config);
     logger.debug(
-      `Creating STDIO client for '${serverName}' with command: '${config.command}' ${config.args?.join(' ') || ''}`,
+      `Creating STDIO client for '${serverName}' with command: '${safeConfig.command}' ${safeConfig.args?.join(' ') || ''}`,
     );
 
-    const client = await experimental_createMCPClient({ transport: new Experimental_StdioMCPTransport(config) });
+    const client = await experimental_createMCPClient({ transport: new Experimental_StdioMCPTransport(safeConfig) });
 
     return Object.assign(client, { serverName });
   }
@@ -500,6 +510,8 @@ export class MCPService {
     });
 
     await Promise.allSettled(createClientPromises);
+
+    this._registerBuiltinTools(); // [FORK] добавляем инструменты самоуправления MCP в общий tool-набор
   }
 
   async checkServersAvailabilities() {
@@ -552,6 +564,7 @@ export class MCPService {
 
     await Promise.allSettled(checkPromises);
 
+    this._registerBuiltinTools(); // [FORK] восстанавливаем инструменты самоуправления после переинициализации
     return this._mcpToolsPerServer;
   }
 
@@ -647,8 +660,13 @@ export class MCPService {
                 toolCallId,
               });
             } catch (error) {
+              // [FORK] Возвращаем модели реальную причину сбоя и пишем её в реестр для самодиагностики MCP
+              const failedServerName = this._toolNamesToServerNames.get(toolName);
+              const message = sanitizeMcpErrorMessage(error);
+              const hint = explainMcpError(message);
+              recordMcpToolError({ serverName: failedServerName, toolName, message, hint });
               logger.error(`error while calling tool "${toolName}":`, error);
-              result = TOOL_EXECUTION_ERROR;
+              result = `${TOOL_EXECUTION_ERROR}: ${message}${hint ? `\n${hint}` : ''}`;
             }
           } else {
             result = TOOL_NO_EXECUTE_FUNCTION;
@@ -689,5 +707,46 @@ export class MCPService {
 
   get toolsWithoutExecute() {
     return this._toolsWithoutExecute;
+  }
+
+  // [FORK] Набор инструментов для модели: MCP + mutating (через подтверждение) + read-only управление (авто-выполнение)
+  get toolsForModel() {
+    return { ...this._toolsWithoutExecute, ...this._builtinReadTools };
+  }
+
+  // [FORK] Регистрируем встроенные инструменты самоуправления MCP в общий tool-набор
+  private _registerBuiltinTools() {
+    const { readTools, mutateTools } = createManagementTools(this);
+
+    this._builtinReadTools = readTools;
+
+    for (const [toolName, toolInstance] of Object.entries({ ...readTools, ...mutateTools })) {
+      this._tools[toolName] = toolInstance;
+      this._toolsWithoutExecute[toolName] = { ...toolInstance, execute: undefined };
+      this._toolNamesToServerNames.set(toolName, 'bolt');
+    }
+  }
+
+  // [FORK] Публичные методы для инструментов управления MCP
+  getServersStatus(): PublicMCPServerTools {
+    return publicMCPServerTools(this._mcpToolsPerServer);
+  }
+
+  async addOrUpdateServer(name: string, serverConfig: Record<string, unknown>): Promise<unknown> {
+    const validated = this._validateServerConfig(name, serverConfig);
+    const next: MCPConfig = {
+      mcpServers: { ...this._userConfig.mcpServers, [name]: validated },
+    };
+    await this.updateConfig(next, this._lastEnv);
+
+    return this.getServersStatus()[name] ?? { status: 'unknown' };
+  }
+
+  async removeServer(name: string): Promise<{ removed: string }> {
+    const servers = { ...this._userConfig.mcpServers };
+    delete servers[name];
+    await this.updateConfig({ mcpServers: servers }, this._lastEnv);
+
+    return { removed: name };
   }
 }

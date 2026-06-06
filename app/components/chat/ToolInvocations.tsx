@@ -212,9 +212,11 @@ const ToolResultsList = memo(({ toolInvocations, toolCallAnnotations, theme }: T
             return annotation.toolCallId === toolCallId;
           });
 
-          const isErrorResult = [TOOL_NO_EXECUTE_FUNCTION, TOOL_EXECUTION_DENIED, TOOL_EXECUTION_ERROR].includes(
-            tool.toolInvocation.result,
-          );
+          // [FORK] Распознаём и расширенную ошибку MCP (заглушка + реальная причина), чтобы показать иконку ошибки
+          const toolResult = tool.toolInvocation.result;
+          const isErrorResult =
+            [TOOL_NO_EXECUTE_FUNCTION, TOOL_EXECUTION_DENIED, TOOL_EXECUTION_ERROR].includes(toolResult) ||
+            (typeof toolResult === 'string' && toolResult.startsWith(TOOL_EXECUTION_ERROR));
 
           return (
             <motion.li
